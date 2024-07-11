@@ -1,0 +1,68 @@
+workflows:
+  ios-workflow:
+    name: iOS Workflow
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        XCODE_WORKSPACE: "Runner.xcworkspace"
+        XCODE_SCHEME: "Runner"
+    scripts:
+      - name: Install Flutter dependencies
+        script: |
+          flutter pub get
+
+      - name: Set up keychain
+        script: |
+          # Create a custom keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # Make the custom keychain default, so xcodebuild will use it for signing
+          security default-keychain -s build.keychain
+          # Unlock the keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # Set keychain timeout to 1 hour for long builds
+          security set-keychain-settings -t 3600 -u build.keychain
+          # Add certificates to keychain and allow codesign to access them
+          security import ./certs/AppleDistribution.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # Install the profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "./profiles/ProvisioningProfile.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Build iOS
+        script: |
+          flutter build ios --release --no-codesign
+
+      - name: Archive iOS build
+        script: |
+          xcodebuild -workspace $XCODE_WORKSPACE \
+                     -scheme $XCODE_SCHEME \
+                     -sdk iphoneos \
+                     -configuration Release \
+                     -archivePath $PWD/build/Runner.xcarchive \
+                     archive
+
+      - name: Export iOS build
+        script: |
+          xcodebuild -exportArchive \
+                     -archivePath $PWD/build/Runner.xcarchive \
+                     -exportOptionsPlist ./exportOptions.plist \
+                     -exportPath $PWD/build/ios
+
+      - name: Upload IPA to Codemagic artifacts
+        script: |
+          mv $PWD/build/ios/*.ipa $PWD/build/ios/app.ipa
+          echo "IPA file path: $PWD/build/ios/app.ipa"
+
+      - name: Publish to TestFlight
+        script: |
+          xcrun altool --upload-app \
+                       --type ios \
+                       --file $PWD/build/ios/app.ipa \
+                       --username "$APP_STORE_CONNECT_USERNAME" \
+                       --password "$APP_STORE_CONNECT_PASSWORD"
+    
+    artifacts:
+      - build/ios/app.ipa
+
